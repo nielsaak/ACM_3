@@ -735,8 +735,8 @@ SimpleBayes_f <- function(bias, Source1, Source2){
 
 # Looping through all the agents to generate the data.
 d <- NULL
-biasM <- 0.5
-biasSD <- 0.5
+biasM_val <- 0.5
+biasSD_val <- 0.5
 agents <- 10
 Source1 <- seq(0.1,0.9, 0.1)
 Source2 <- seq(0.1,0.9, 0.1)
@@ -758,7 +758,7 @@ for (agent in 1:agents) {
     choice[n] <- rbinom(1,1, belief[n])
   }
   
-  temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM, biasSD, continuous, discrete)
+  temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, continuous, discrete)
   
   if (agent > 1) {
     d <- rbind(d, temp)
@@ -810,6 +810,266 @@ samples <- simple_multi_model$sample(
 samples$summary()
 
 draws_df <- as_draws_df(samples$draws())
+
+ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasM_val) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for Bias", subtitle = "Black line indicates true value")
+
+ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasSD_val) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for Bias", subtitle = "Black line indicates true value")
+
+samples$cmdstan_diagnose()
+
+ggplot(draws_df, aes(.iteration, biasM, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, biasSD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+```
+
+```{r compiling model}
+
+# Compiling model
+weighted_multi_model <- cmdstan_model("weighted_multi_bayesian.stan", cpp_options = list(stan_threads = TRUE), pedantic = TRUE)
+
+```
+
+### Parameter Recovery
+
+```{r fake data}
+WeightedBayes_f <- function(bias, weight1, weight2, Source1, Source2){
+  
+  outcome <- inv_logit_scaled(bias + weight1 * logit_scaled(Source1) + weight2 * logit_scaled(Source2))
+  # outcome <- inv_logit_scaled(bias + logit_scaled(Source1) + logit_scaled(Source2))
+  
+  return(outcome)
+}
+
+# Looping through all the agents to generate the data.
+d <- NULL
+biasM_val <- 0.5
+biasSD_val <- 0.5
+agents <- 10
+Source1 <- seq(0.1,0.9, 0.1)
+Source2 <- seq(0.1,0.9, 0.1)
+
+db <- expand.grid(Source1 = Source1, Source2 = Source2)
+
+for (agent in 1:agents) {
+  
+  bias <- rnorm(1, biasM, biasM)
+  
+  belief <- rep(NA, nrow(db))
+  choice <- rep(NA, nrow(db))
+  continuous <- rep(NA, nrow(db))
+  discrete <- rep(NA, nrow(db))
+  
+  for (n in seq(nrow(db))) {
+    
+    belief[n] <- WeightedBayes_f(bias, db[n,1], db[n,2])
+    choice[n] <- rbinom(1,1, belief[n])
+  }
+  
+  temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, continuous, discrete)
+  
+  if (agent > 1) {
+    d <- rbind(d, temp)
+  } else{
+    d <- temp
+  }
+  
+}
+
+df_first_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source1) %>%
+  pivot_wider(values_from = source1, names_from = agent) %>% 
+  select(-trial)
+
+df_group_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source2) %>%
+  pivot_wider(values_from = source2, names_from = agent) %>% 
+  select(-trial)
+
+df_second_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, choice) %>%
+  pivot_wider(values_from = choice, names_from = agent) %>% 
+  select(-trial)
+
+data_simpleBayes <- list(
+  trials = (d %>% filter(agent == 1) %>% nrow()),
+  subjects = n_distinct(d$agent),
+  first_rating = as.matrix(df_first_rating),
+  other_rating = as.matrix(df_group_rating),
+  second_rating = as.matrix(df_second_rating)
+  )
+
+samples <- weighted_multi_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+samples$summary()
+
+draws_df <- as_draws_df(samples$draws())
+
+ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasM_val) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for Bias", subtitle = "Black line indicates true value")
+
+ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasSD_val) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for Bias", subtitle = "Black line indicates true value")
+
+samples$cmdstan_diagnose()
+
+ggplot(draws_df, aes(.iteration, biasM, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+ggplot(draws_df, aes(.iteration, biasSD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+```
+
+### Parameter Recovery
+
+```{r fake data}
+SimpleBayes_f <- function(bias, Source1, Source2){
+  
+  outcome <- inv_logit_scaled(bias + logit_scaled(Source1) + logit_scaled(Source2))
+  
+  return(outcome)
+}
+
+# Looping through all the agents to generate the data.
+d <- NULL
+biasM_val <- 0.5
+biasSD_val <- 0.5
+agents <- 10
+Source1 <- seq(0.1,0.9, 0.1)
+Source2 <- seq(0.1,0.9, 0.1)
+
+db <- expand.grid(Source1 = Source1, Source2 = Source2)
+
+for (agent in 1:agents) {
+  
+  bias <- rnorm(1, biasM, biasM)
+  
+  belief <- rep(NA, nrow(db))
+  choice <- rep(NA, nrow(db))
+  continuous <- rep(NA, nrow(db))
+  discrete <- rep(NA, nrow(db))
+  
+  for (n in seq(nrow(db))) {
+    
+    belief[n] <- SimpleBayes_f(bias, db[n,1], db[n,2])
+    choice[n] <- rbinom(1,1, belief[n])
+  }
+  
+  temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, continuous, discrete)
+  
+  if (agent > 1) {
+    d <- rbind(d, temp)
+  } else{
+    d <- temp
+  }
+  
+}
+
+df_first_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source1) %>%
+  pivot_wider(values_from = source1, names_from = agent) %>% 
+  select(-trial)
+
+df_group_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source2) %>%
+  pivot_wider(values_from = source2, names_from = agent) %>% 
+  select(-trial)
+
+df_second_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, choice) %>%
+  pivot_wider(values_from = choice, names_from = agent) %>% 
+  select(-trial)
+
+data_simpleBayes <- list(
+  trials = (d %>% filter(agent == 1) %>% nrow()),
+  subjects = n_distinct(d$agent),
+  first_rating = as.matrix(df_first_rating),
+  other_rating = as.matrix(df_group_rating),
+  second_rating = as.matrix(df_second_rating)
+  )
+
+samples <- simple_multi_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+samples$summary()
+
+draws_df <- as_draws_df(samples$draws())
+
+ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasM_val) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for Bias", subtitle = "Black line indicates true value")
+
+ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasSD_val) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for Bias", subtitle = "Black line indicates true value")
 
 samples$cmdstan_diagnose()
 

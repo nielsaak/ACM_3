@@ -35,6 +35,8 @@ parameters {
   real<lower = 0> weight1SD;
   real<lower = 0, upper = 1> weight2M;
   real<lower = 0> weight2SD;
+  array[subjects] real z_weight1;
+  array[subjects] real z_weight2;
 }
 
 transformed parameters {
@@ -42,26 +44,41 @@ transformed parameters {
   vector[subjects] weight1;
   vector[subjects] weight2;
   bias = biasM + (biasSD * to_vector(z_bias));
+  weight1 = weight1M + (weight1SD * to_vector(z_weight1));
+  weight2 = weight2M + (weight2SD * to_vector(z_weight2));
 }
 
 model {
   target +=  normal_lpdf(biasM | 0, 1);
   target +=  normal_lpdf(biasSD | 0, 1) - normal_lccdf(0 | 0, 1);
+  target +=  beta_lpdf(weight1M | 2, 1);
+  target +=  normal_lpdf(weight1SD | 0, 1) - normal_lccdf(0 | 0, 1);
+  target +=  beta_lpdf(weight2M | 1, 1);
+  target +=  normal_lpdf(weight2SD | 0, 1) - normal_lccdf(0 | 0, 1);
   
   target += std_normal_lpdf(to_vector(z_bias));
+  target += std_normal_lpdf(to_vector(z_weight1));
+  target += std_normal_lpdf(to_vector(z_weight2));
   
   for (s in 1:subjects){
-    target +=  bernoulli_logit_lpmf(second_rating[,s] |  bias[s] + 0.5 * to_vector(l_Source1[,s]) + 0.5 * to_vector(l_Source2[,s]));
+    target +=  bernoulli_logit_lpmf(second_rating[,s] |  bias[s] +  weight1[s] * to_vector(l_Source1[,s]) +  weight2[s] * to_vector(l_Source2[,s]));
   }
 }
 
 generated quantities {
   real biasM_prior;
   real biasSD_prior;
+  real weight1M_prior;
+  real weight1SD_prior;
+  real weight2M_prior;
+  real weight2SD_prior;
   // real z_bias_prior;
   // array[trials] real log_lik;
   // 
   biasM_prior = normal_rng(0, 1);
   biasSD_prior = normal_lb_rng(0, 1, 0);
-  // z_bias_prior = normal_rng(0, 1);
+  weight1M_prior = beta_rng(1, 1);
+  weight1SD_prior = normal_lb_rng(0, 1, 0);
+  weight2M_prior = beta_rng(1, 1);
+  weight2SD_prior = normal_lb_rng(0, 1, 0);
 }
