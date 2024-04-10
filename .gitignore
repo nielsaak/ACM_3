@@ -41,3 +41,6 @@ simple_multi_bayesian
 weighted_multi_bayesian
 
 model_markdown.Rmd
+
+simple_bayesian.stan
+weighted_bayesian.stan
