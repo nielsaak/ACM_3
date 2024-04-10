@@ -51,7 +51,7 @@ transformed parameters {
 model {
   target +=  normal_lpdf(biasM | 0, 1);
   target +=  normal_lpdf(biasSD | 0, 1) - normal_lccdf(0 | 0, 1);
-  target +=  beta_lpdf(weight1M | 2, 1);
+  target +=  beta_lpdf(weight1M | 1, 1);
   target +=  normal_lpdf(weight1SD | 0, 1) - normal_lccdf(0 | 0, 1);
   target +=  beta_lpdf(weight2M | 1, 1);
   target +=  normal_lpdf(weight2SD | 0, 1) - normal_lccdf(0 | 0, 1);
@@ -72,6 +72,7 @@ generated quantities {
   real weight1SD_prior;
   real weight2M_prior;
   real weight2SD_prior;
+  array[trials, subjects] real log_lik;
   // real z_bias_prior;
   // array[trials] real log_lik;
   // 
@@ -81,4 +82,10 @@ generated quantities {
   weight1SD_prior = normal_lb_rng(0, 1, 0);
   weight2M_prior = beta_rng(1, 1);
   weight2SD_prior = normal_lb_rng(0, 1, 0);
+  
+  for(n in 1:trials){
+    for (s in 1:subjects){
+      log_lik[n,s] = bernoulli_logit_lpmf(second_rating[n,s] |  bias[s] +  weight1[s] * l_Source1[n,s] +  weight2[s] * l_Source2[n,s]);
+    }
+  }
 }

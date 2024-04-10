@@ -1,0 +1,626 @@
+---
+title: "portfolio_3"
+author: "Niels Aalund Krogsgaard"
+date: "2024-03-21"
+output: pdf_document
+---
+
+```{r installing}
+pacman::p_load(tidyverse,
+               here,
+               posterior,
+               cmdstanr,
+               brms, 
+               tidybayes, 
+               loo)
+```
+
+# Data exploration
+
+```{r}
+
+```
+
+
+# Parameter Recovery
+
+## Simple Multi-level model
+
+```{r compiling model}
+
+# Compiling model
+simple_multi_model <- cmdstan_model("simple_multi_bayesian.stan", cpp_options = list(stan_threads = TRUE), pedantic = TRUE)
+
+```
+
+```{r fake data}
+SimpleBayes_f <- function(bias, Source1, Source2){
+  
+  outcome <- inv_logit_scaled(bias + logit_scaled(Source1) + logit_scaled(Source2))
+  
+  return(outcome)
+}
+
+# Looping through all the agents to generate the data.
+d <- NULL
+biasM_val <- 0.5
+biasSD_val <- 0.5
+agents <- 10
+Source1 <- seq(0.1,0.9, 0.1)
+Source2 <- seq(0.1,0.9, 0.1)
+
+db <- expand.grid(Source1 = Source1, Source2 = Source2)
+
+for (agent in 1:agents) {
+  
+  bias <- rnorm(1, biasM_val, biasSD_val)
+  
+  belief <- rep(NA, nrow(db))
+  choice <- rep(NA, nrow(db))
+  continuous <- rep(NA, nrow(db))
+  discrete <- rep(NA, nrow(db))
+  
+  for (n in seq(nrow(db))) {
+    
+    belief[n] <- SimpleBayes_f(bias, db[n,1], db[n,2])
+    choice[n] <- rbinom(1,1, belief[n])
+  }
+  
+  temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, continuous, discrete)
+  
+  if (agent > 1) {
+    d <- rbind(d, temp)
+  } else{
+    d <- temp
+  }
+  
+}
+
+df_first_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source1) %>%
+  pivot_wider(values_from = source1, names_from = agent) %>% 
+  select(-trial)
+
+df_group_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source2) %>%
+  pivot_wider(values_from = source2, names_from = agent) %>% 
+  select(-trial)
+
+df_second_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, choice) %>%
+  pivot_wider(values_from = choice, names_from = agent) %>% 
+  select(-trial)
+
+data_simpleBayes <- list(
+  trials = (d %>% filter(agent == 1) %>% nrow()),
+  subjects = n_distinct(d$agent),
+  first_rating = as.matrix(df_first_rating),
+  other_rating = as.matrix(df_group_rating),
+  second_rating = as.matrix(df_second_rating)
+  )
+
+samples <- simple_multi_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+simple_sample_summary <- samples$summary()
+simple_sample_summary_short <- samples$summary() %>% 
+  filter(variable %in% c("lp__", "biasM", "biasSD"))
+write_csv(simple_sample_summary, "output/recovery/simple_bayesian_model_full_fake.csv")
+write_csv(simple_sample_summary_short, "output/recovery/simple_bayesian_model_short_fake.csv")
+
+draws_df <- as_draws_df(samples$draws())
+
+prior_post_plot_biasM <- ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasM_val) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of Bias", subtitle = "Black line indicates true value")
+
+prior_post_plot_biasSD <- ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasSD_val) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of Bias", subtitle = "Black line indicates true value")
+
+samples$cmdstan_diagnose()
+
+caterpiller_simple_biasm <- ggplot(draws_df, aes(.iteration, biasM, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_simple_biassd <- ggplot(draws_df, aes(.iteration, biasSD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+ggsave(filename = "figures/recovery/simple/prior_post_plot_biasM.png", plot = prior_post_plot_biasM)
+ggsave(filename = "figures/recovery/simple/prior_post_plot_biasSD.png", plot = prior_post_plot_biasSD)
+ggsave(filename = "figures/recovery/simple/caterpillar_simple_biasM.png", plot = caterpiller_simple_biasm)
+ggsave(filename = "figures/recovery/simple/caterpillar_simple_biasSD.png", plot = caterpiller_simple_biassd)
+```
+
+## Weighted Multi-level model
+
+```{r compiling model}
+
+# Compiling model
+weighted_multi_model <- cmdstan_model("weighted_multi_bayesian.stan", cpp_options = list(stan_threads = TRUE), pedantic = TRUE)
+
+```
+
+```{r fake data}
+WeightedBayes_f <- function(bias, weight1, weight2, Source1, Source2){
+  
+  outcome <- inv_logit_scaled(bias + weight1 * logit_scaled(Source1) + weight2 * logit_scaled(Source2))
+  # outcome <- inv_logit_scaled(bias + logit_scaled(Source1) + logit_scaled(Source2))
+  
+  return(outcome)
+}
+
+# Looping through all the agents to generate the data.
+d <- NULL
+biasM_val <- 0.5
+biasSD_val <- 0.5
+weight1M_val <- 0.7
+weight2M_val <- 0.2
+weight1SD_val <- 0.2
+weight2SD_val <- 0.2
+agents <- 10
+Source1 <- seq(0.1,0.9, 0.1)
+Source2 <- seq(0.1,0.9, 0.1)
+
+db <- expand.grid(Source1 = Source1, Source2 = Source2)
+
+for (agent in 1:agents) {
+  
+  bias <- rnorm(1, biasM_val, biasSD_val)
+  weight1 <- rnorm(1, weight1M_val, weight1SD_val)
+  weight2 <- rnorm(1, weight2M_val, weight2SD_val)
+  
+  belief <- rep(NA, nrow(db))
+  choice <- rep(NA, nrow(db))
+  continuous <- rep(NA, nrow(db))
+  discrete <- rep(NA, nrow(db))
+  
+  for (n in seq(nrow(db))) {
+    
+    belief[n] <- WeightedBayes_f(bias, weight1, weight2, db[n,1], db[n,2])
+    choice[n] <- rbinom(1,1, belief[n])
+  }
+  
+  temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, weight1, weight1M_val, weight1SD_val, weight2, weight2M_val, weight2SD_val, continuous, discrete)
+  
+  if (agent > 1) {
+    d <- rbind(d, temp)
+  } else{
+    d <- temp
+  }
+  
+}
+
+df_first_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source1) %>%
+  pivot_wider(values_from = source1, names_from = agent) %>% 
+  select(-trial)
+
+df_group_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, source2) %>%
+  pivot_wider(values_from = source2, names_from = agent) %>% 
+  select(-trial)
+
+df_second_rating <- d %>% 
+  group_by(agent) %>% 
+  select(trial, agent, choice) %>%
+  pivot_wider(values_from = choice, names_from = agent) %>% 
+  select(-trial)
+
+data_simpleBayes <- list(
+  trials = (d %>% filter(agent == 1) %>% nrow()),
+  subjects = n_distinct(d$agent),
+  first_rating = as.matrix(df_first_rating),
+  other_rating = as.matrix(df_group_rating),
+  second_rating = as.matrix(df_second_rating)
+  )
+
+samples <- weighted_multi_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+samples$summary()
+
+weighted_sample_summary <- samples$summary()
+weighted_sample_summary_short <- samples$summary() %>% 
+  filter(variable %in% c("lp__", "biasM", "biasSD", "weight1M", "weight1SD", "weight2M", "weight1SD"))
+write_csv(weighted_sample_summary, "output/recovery/weighted_bayesian_model_full_fake.csv")
+write_csv(weighted_sample_summary_short, "output/recovery/weighted_bayesian_model_short_fake.csv")
+
+draws_df <- as_draws_df(samples$draws())
+
+prior_post_plot_biasM <- ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasM_val) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of Bias", subtitle = "Black line indicates true value")
+
+prior_post_plot_biasSD <- ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasSD_val) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of Bias", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight1M <- ggplot(draws_df) +
+  geom_density(aes(weight1M), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight1M_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight1M_val) +
+  xlab("Weight1M (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of weight 1", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight1SD <- ggplot(draws_df) +
+  geom_density(aes(weight1SD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight1SD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight1SD_val) +
+  xlab("Weight1SD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of weight 1", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight2M <- ggplot(draws_df) +
+  geom_density(aes(weight2M), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight2M_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight2M_val) +
+  xlab("Weight2M (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of weight 2", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight2SD <- ggplot(draws_df) +
+  geom_density(aes(weight2SD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight2SD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight2SD_val) +
+  xlab("Weight2SD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of weight 2", subtitle = "Black line indicates true value")
+
+samples$cmdstan_diagnose()
+
+caterpiller_weighted_biasm <- ggplot(draws_df, aes(.iteration, biasM, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_biassd <- ggplot(draws_df, aes(.iteration, biasSD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight1m <- ggplot(draws_df, aes(.iteration, weight1M, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight1sd <- ggplot(draws_df, aes(.iteration, weight1SD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight2m<- ggplot(draws_df, aes(.iteration, weight2M, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight2sd <- ggplot(draws_df, aes(.iteration, weight2SD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+ggsave(filename = "figures/recovery/weighted/prior_post_plot_biasM.png", plot = prior_post_plot_biasM)
+ggsave(filename = "figures/recovery/weighted/prior_post_plot_biasSD.png", plot = prior_post_plot_biasSD)
+ggsave(filename = "figures/recovery/weighted/prior_post_plot_weight1M.png", plot = prior_post_plot_weight1M)
+ggsave(filename = "figures/recovery/weighted/prior_post_plot_weight1SD.png", plot = prior_post_plot_weight1SD)
+ggsave(filename = "figures/recovery/weighted/prior_post_plot_weight2M.png", plot = prior_post_plot_weight2M)
+ggsave(filename = "figures/recovery/weighted/prior_post_plot_weight2SD.png", plot = prior_post_plot_weight2SD)
+
+ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_biasm)
+ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_biassd)
+ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight1m)
+ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight1sd)
+ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight2m)
+ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight2sd)
+```
+
+# Parameter Estimation
+
+```{r data}
+set.seed(42)
+
+df_real <- read_csv("data/cogsci_clean.csv")
+
+df_real <- df_real %>% 
+  filter(GroupRating != 0) %>% 
+  filter(ID != 27) %>% # participant with only 1 for second rating
+  # filter((ID == 1) | (ID == 12)) %>% 
+  select(ID,FaceID, FirstRating, GroupRating, SecondRating) %>% 
+  mutate(FirstRating_new = FirstRating/9, 
+         GroupRating_new = GroupRating/9,
+         # Choice = ifelse(SecondRating > 4, 1, 0)
+         Choice = NA
+         )
+
+for (n in seq(nrow(df_real))) {
+  df_real$Choice[n] <- rbinom(1,1, df_real$SecondRating[n]/9)
+}
+
+# the problem here is that the trial does not correspond to the same FaceID
+
+df_first_rating <- df_real %>% 
+  group_by(ID) %>% 
+  mutate(trial = row_number()) %>% select(trial, ID, FirstRating_new) %>%
+  pivot_wider(values_from = FirstRating_new, names_from = ID) %>% 
+  select(-trial)
+
+df_group_rating <- df_real %>% 
+  group_by(ID) %>% 
+  mutate(trial = row_number()) %>% select(trial, ID, GroupRating_new) %>%
+  pivot_wider(values_from = GroupRating_new, names_from = ID) %>% 
+  select(-trial)
+
+df_second_rating <- df_real %>% 
+  group_by(ID) %>% 
+  mutate(trial = row_number()) %>% select(trial, ID, Choice) %>%
+  pivot_wider(values_from = Choice, names_from = ID) %>% 
+  select(-trial)
+
+data_simpleBayes <- list(
+  trials = (df_real %>% filter(ID == 1) %>% nrow()),
+  subjects = n_distinct(df_real$ID),
+  first_rating = as.matrix(df_first_rating),
+  other_rating = as.matrix(df_group_rating),
+  second_rating = as.matrix(df_second_rating)
+  )
+
+samples1 <- simple_multi_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+samples2 <- weighted_multi_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =4,
+   parallel_chains = 4,
+   threads_per_chain = 2,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+)
+
+samples1$summary()
+simple_sample_summary <- samples1$summary()
+simple_sample_summary_short <- samples1$summary() %>% 
+  filter(variable %in% c("lp__", "biasM", "biasSD"))
+write_csv(simple_sample_summary, "output/estimation/simple_bayesian_model_full.csv")
+write_csv(simple_sample_summary_short, "output/estimation/simple_bayesian_model_short.csv")
+
+samples2$summary()
+weighted_sample_summary <- samples2$summary()
+weighted_sample_summary_short <- samples2$summary() %>% 
+  filter(variable %in% c("lp__", "biasM", "biasSD", "weight1M", "weight1SD", "weight2M", "weight1SD"))
+write_csv(weighted_sample_summary, "output/estimation/weighted_bayesian_model_full.csv")
+write_csv(weighted_sample_summary_short, "output/estimation/weighted_bayesian_model_short.csv")
+```
+
+
+```{r data}
+# Model quality check for simple bayesian
+draws_df <- as_draws_df(samples1$draws())
+
+prior_post_plot_biasM <- ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of Bias")
+
+prior_post_plot_biasSD <- ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of Bias")
+
+samples1$cmdstan_diagnose()
+
+caterpiller_simple_biasm <- ggplot(draws_df, aes(.iteration, biasM, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_simple_biassd <- ggplot(draws_df, aes(.iteration, biasSD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+ggsave(filename = "figures/estimation/simple/prior_post_plot_biasM.png", plot = prior_post_plot_biasM)
+ggsave(filename = "figures/estimation/simple/prior_post_plot_biasSD.png", plot = prior_post_plot_biasSD)
+ggsave(filename = "figures/estimation/simple/caterpillar_simple_biasM.png", plot = caterpiller_simple_biasm)
+ggsave(filename = "figures/estimation/simple/caterpillar_simple_biasSD.png", plot = caterpiller_simple_biassd)
+
+# Model quality check for weighted bayesian
+draws_df <- as_draws_df(samples2$draws())
+
+prior_post_plot_biasM <- ggplot(draws_df) +
+  geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasM_val) +
+  xlab("BiasM (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of Bias", subtitle = "Black line indicates true value")
+
+prior_post_plot_biasSD <- ggplot(draws_df) +
+  geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = biasSD_val) +
+  xlab("BiasSD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of Bias", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight1M <- ggplot(draws_df) +
+  geom_density(aes(weight1M), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight1M_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight1M_val) +
+  xlab("Weight1M (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of weight 1", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight1SD <- ggplot(draws_df) +
+  geom_density(aes(weight1SD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight1SD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight1SD_val) +
+  xlab("Weight1SD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of weight 1", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight2M <- ggplot(draws_df) +
+  geom_density(aes(weight2M), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight2M_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight2M_val) +
+  xlab("Weight2M (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group mean of weight 2", subtitle = "Black line indicates true value")
+
+prior_post_plot_weight2SD <- ggplot(draws_df) +
+  geom_density(aes(weight2SD), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight2SD_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept = weight2SD_val) +
+  xlab("Weight2SD (Log Space)") +
+  ylab("Estimate Densities") +
+  theme_classic() +
+  labs(title = "Prior and Posterior Distrbution for group SD of weight 2", subtitle = "Black line indicates true value")
+
+samples2$cmdstan_diagnose()
+
+caterpiller_weighted_biasm <- ggplot(draws_df, aes(.iteration, biasM, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_biassd <- ggplot(draws_df, aes(.iteration, biasSD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight1m <- ggplot(draws_df, aes(.iteration, weight1M, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight1sd <- ggplot(draws_df, aes(.iteration, weight1SD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight2m<- ggplot(draws_df, aes(.iteration, weight2M, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+caterpiller_weighted_weight2sd <- ggplot(draws_df, aes(.iteration, weight2SD, group = .chain, color = .chain)) +
+  geom_line() +
+  theme_classic()
+
+ggsave(filename = "figures/estimation/weighted/prior_post_plot_biasM.png", plot = prior_post_plot_biasM)
+ggsave(filename = "figures/estimation/weighted/prior_post_plot_biasSD.png", plot = prior_post_plot_biasSD)
+ggsave(filename = "figures/estimation/weighted/prior_post_plot_weight1M.png", plot = prior_post_plot_weight1M)
+ggsave(filename = "figures/estimation/weighted/prior_post_plot_weight1SD.png", plot = prior_post_plot_weight1SD)
+ggsave(filename = "figures/estimation/weighted/prior_post_plot_weight2M.png", plot = prior_post_plot_weight2M)
+ggsave(filename = "figures/estimation/weighted/prior_post_plot_weight2SD.png", plot = prior_post_plot_weight2SD)
+
+ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_biasm)
+ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_biassd)
+ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight1m)
+ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight1sd)
+ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight2m)
+ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight2sd)
+```
+
+```{r}
+loo_model1 <- samples1$loo(save_psis=TRUE, cores=4)
+loo_model2 <- samples2$loo(save_psis=TRUE, cores=4)
+
+png(file="figures/simple_psis.png", width=600, height=350)
+plot(loo_model1)
+dev.off()
+png(file="figures/weighted_psis.png", width=600, height=350)
+plot(loo_model2)
+dev.off()
+
+
+loo_compare(loo_model1, loo_model2)
+
+loo_model_weights(list(loo_model1, loo_model2))
+```
+
+```{r}
+elpd <- tibble(
+  n = seq(3010),
+  diff_elpd = 
+  loo_model1$pointwise[, "elpd_loo"] - 
+  loo_model2$pointwise[, "elpd_loo"])
+
+p1 <- ggplot(elpd, aes(x = n, y = diff_elpd)) +
+  geom_point(alpha = .1) +
+  #xlim(.5,1.01) +
+  #ylim(-1.5,1.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  theme_bw() +
+  lims(y = c(-2,2))
+
+pacman::p_load(patchwork)
+p1
+
+ggsave("figures/elpd_diff.png", p1)
+```
+
+

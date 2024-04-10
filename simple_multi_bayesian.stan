@@ -84,10 +84,17 @@ model {
 generated quantities {
   real biasM_prior;
   real biasSD_prior;
+  array[trials,subjects] real log_lik;
   // real z_bias_prior;
   // array[trials] real log_lik;
   // 
   biasM_prior = normal_rng(0, 1);
   biasSD_prior = normal_lb_rng(0, 1, 0);
   // z_bias_prior = normal_rng(0, 1);
+  
+  for(n in 1:trials){
+    for (s in 1:subjects){
+      log_lik[n,s] = bernoulli_logit_lpmf(second_rating[n,s] | bias[s] + 0.5 * l_Source1[n,s] + 0.5 * l_Source2[n,s]);
+    }
+  }
 }
