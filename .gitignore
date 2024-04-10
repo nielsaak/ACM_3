@@ -1,16 +1,12 @@
 # Ignore all
 *
-
 # Unignore all with extensions
 !*.*
-
 # Unignore all dirs
 !*/
-
 .DS_Store
 /.DS_Store
 /*/.DS_Store
-
 # History files
 .Rhistory
 .Rapp.history
@@ -48,12 +44,8 @@ po/*~
 rsconnect/
 juli/*
 *.Rproj
-
 simple_multi_bayesian
-
 weighted_multi_bayesian
-
 model_markdown.Rmd
-
 simple_bayesian.stan
 weighted_bayesian.stan

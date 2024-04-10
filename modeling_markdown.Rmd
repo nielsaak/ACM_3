@@ -157,6 +157,110 @@ ggsave(filename = "figures/recovery/simple/caterpillar_simple_biasM.png", plot =
 ggsave(filename = "figures/recovery/simple/caterpillar_simple_biasSD.png", plot = caterpiller_simple_biassd)
 ```
 
+```{r}
+recovery_df <- NULL
+
+for (biasM_val in c(-2,-1,-0.5,-0.2,0,0.2,0.5,1,2)) { # Looping through rate levels
+  for (biasSD_val in c(0.5)) {
+  
+    # Looping through all the agents to generate the data.
+    d <- NULL
+    agents <- 10
+    Source1 <- seq(0.1,0.9, 0.1)
+    Source2 <- seq(0.1,0.9, 0.1)
+
+    db <- expand.grid(Source1 = Source1, Source2 = Source2)
+
+    for (agent in 1:agents) {
+
+      bias <- rnorm(1, biasM_val, biasSD_val)
+      
+      belief <- rep(NA, nrow(db))
+      choice <- rep(NA, nrow(db))
+      continuous <- rep(NA, nrow(db))
+      discrete <- rep(NA, nrow(db))
+      
+      for (n in seq(nrow(db))) {
+  
+        belief[n] <- SimpleBayes_f(bias, db[n,1], db[n,2])
+        choice[n] <- rbinom(1,1, belief[n])
+      }
+      
+      temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, continuous, discrete)
+
+      if (agent > 1) {
+        d <- rbind(d, temp)
+      } else{
+        d <- temp
+      }
+
+    }
+
+    df_first_rating <- d %>% 
+      group_by(agent) %>% 
+      select(trial, agent, source1) %>%
+      pivot_wider(values_from = source1, names_from = agent) %>% 
+      select(-trial)
+    
+    df_group_rating <- d %>% 
+      group_by(agent) %>% 
+      select(trial, agent, source2) %>%
+      pivot_wider(values_from = source2, names_from = agent) %>% 
+      select(-trial)
+    
+    df_second_rating <- d %>% 
+      group_by(agent) %>% 
+      select(trial, agent, choice) %>%
+      pivot_wider(values_from = choice, names_from = agent) %>% 
+      select(-trial)
+
+    data_simpleBayes <- list(
+      trials = (d %>% filter(agent == 1) %>% nrow()),
+      subjects = n_distinct(d$agent),
+      first_rating = as.matrix(df_first_rating),
+      other_rating = as.matrix(df_group_rating),
+      second_rating = as.matrix(df_second_rating)
+      )
+
+    samples <- simple_multi_model$sample(
+       data = data_simpleBayes,
+       seed = 123,
+       chains =4,
+       parallel_chains = 4,
+       threads_per_chain = 2,
+       iter_warmup = 2000,
+       iter_sampling = 2000,
+       refresh = 500,
+       max_treedepth = 20,
+       adapt_delta = 0.99,
+    )
+      
+    draws_df <- as_draws_df(samples$draws()) 
+    
+    temp <- tibble(biasM_est = mean((draws_df$biasM)), 
+                   biasM_true = biasM_val,
+                   biasSD_est = mean((draws_df$biasSD)), 
+                   biasSD_true = biasM_val)
+    
+    if (exists("recovery_df")) {recovery_df <- rbind(recovery_df, temp)} else {recovery_df <- temp}
+  }
+}
+
+write_csv(recovery_df, "output/recovery/recoverydf_simple.csv")
+
+recovery_simple_plot <- recovery_df %>% 
+  ggplot(aes(biasM_est, biasM_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated mean of Bias", y = "True mean of Bias", title = "Parameter Recovery For Different Levels of bias") +
+  lims(x = c(-2.5,2.5), y = c(-2.5,2.5))
+
+ggsave("figures/recovery/simple/recovery_plot.png", recovery_simple_plot)
+```
+
+
 ## Weighted Multi-level model
 
 ```{r compiling model}
@@ -358,6 +462,175 @@ ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasM.png", plot
 ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight1sd)
 ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight2m)
 ggsave(filename = "figures/recovery/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight2sd)
+```
+
+```{r}
+recovery_df <- NULL
+
+for (biasM_val in c(-1,-0.5,0,0.5,1)) {
+  for (weight1M_val in c(0.1,0.3,0.5,0.7,0.9)) {
+    for (weight2M_val in c(0.1,0.3,0.5,0.7,0.9)) {
+      for (biasSD_val in c(0.5)) {
+        for (biasSD_val in c(0.5)) {
+          for (biasSD_val in c(0.5)) {
+          
+            # Looping through all the agents to generate the data.
+            d <- NULL
+            agents <- 10
+            Source1 <- seq(0.1,0.9, 0.1)
+            Source2 <- seq(0.1,0.9, 0.1)
+            
+            db <- expand.grid(Source1 = Source1, Source2 = Source2)
+            
+            for (agent in 1:agents) {
+              
+              bias <- rnorm(1, biasM_val, biasSD_val)
+              weight1 <- rnorm(1, weight1M_val, weight1SD_val)
+              weight2 <- rnorm(1, weight2M_val, weight2SD_val)
+              
+              belief <- rep(NA, nrow(db))
+              choice <- rep(NA, nrow(db))
+              
+              for (n in seq(nrow(db))) {
+                
+                belief[n] <- WeightedBayes_f(bias, weight1, weight2, db[n,1], db[n,2])
+                choice[n] <- rbinom(1,1, belief[n])
+              }
+              
+              temp <- tibble(agent, trial = seq(nrow(db)), source1 = db[,1], source2 = db[,2],  belief, choice, bias, biasM_val, biasSD_val, weight1, weight1M_val, weight1SD_val, weight2, weight2M_val, weight2SD_val)
+              
+              if (agent > 1) {
+                d <- rbind(d, temp)
+              } else{
+                d <- temp
+              }
+              
+            }
+            
+            df_first_rating <- d %>% 
+              group_by(agent) %>% 
+              select(trial, agent, source1) %>%
+              pivot_wider(values_from = source1, names_from = agent) %>% 
+              select(-trial)
+            
+            df_group_rating <- d %>% 
+              group_by(agent) %>% 
+              select(trial, agent, source2) %>%
+              pivot_wider(values_from = source2, names_from = agent) %>% 
+              select(-trial)
+            
+            df_second_rating <- d %>% 
+              group_by(agent) %>% 
+              select(trial, agent, choice) %>%
+              pivot_wider(values_from = choice, names_from = agent) %>% 
+              select(-trial)
+            
+            data_simpleBayes <- list(
+              trials = (d %>% filter(agent == 1) %>% nrow()),
+              subjects = n_distinct(d$agent),
+              first_rating = as.matrix(df_first_rating),
+              other_rating = as.matrix(df_group_rating),
+              second_rating = as.matrix(df_second_rating)
+              )
+            
+            samples <- weighted_multi_model$sample(
+               data = data_simpleBayes,
+               seed = 123,
+               chains =4,
+               parallel_chains = 4,
+               threads_per_chain = 2,
+               iter_warmup = 2000,
+               iter_sampling = 2000,
+               refresh = 500,
+               max_treedepth = 20,
+               adapt_delta = 0.99,
+            )
+              
+            draws_df <- as_draws_df(samples$draws()) 
+            
+            temp <- tibble(biasM_est = mean((draws_df$biasM)), 
+                           biasM_true = biasM_val,
+                           biasSD_est = mean((draws_df$biasSD)), 
+                           biasSD_true = biasSD_val,
+                           weight1M_est = mean((draws_df$weight1M)), 
+                           weight1M_true = weight1M_val,
+                           weight1SD_est = mean((draws_df$weight1SD)), 
+                           weight1SD_true = weight1SD_val,
+                           weight2M_est = mean((draws_df$weight2M)), 
+                           weight2M_true = weight2M_val,
+                           weight2SD_est = mean((draws_df$weight2SD)), 
+                           weight2SD_true = weight2SD_val)
+            
+            if (exists("recovery_df")) {recovery_df <- rbind(recovery_df, temp)} else {recovery_df <- temp}
+          }
+        }
+      }
+    }
+  }
+}
+
+write_csv(recovery_df, "output/recovery/recoverydf_weighted.csv")
+
+recovery_weighted_biasM_plot <- recovery_df %>% 
+  ggplot(aes(biasM_est, biasM_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated mean of Bias", y = "True mean of Bias", title = "Parameter Recovery For Different Levels of bias") +
+  lims(x = c(-2.5,2.5), y = c(-2.5,2.5))
+
+recovery_weighted_biasSD_plot <- recovery_df %>% 
+  ggplot(aes(biasSD_est, biasSD_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated SD of Bias", y = "True SD of Bias", title = "Parameter Recovery For Different Levels of SD bias") +
+  lims(x = c(0,1), y = c(0,1))
+
+recovery_weighted_weight1M_plot <- recovery_df %>% 
+  ggplot(aes(weight1M_est, weight1M_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated mean of weight 1", y = "True mean of weight 1", title = "Parameter Recovery For Different Levels of weight 1") +
+  lims(x = c(0,1), y = c(0,1))
+
+recovery_weighted_weight1SD_plot <- recovery_df %>% 
+  ggplot(aes(weight1SD_est, weight1SD_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated SD of weight 1", y = "True SD of weight 1", title = "Parameter Recovery For Different Levels of SD of weight 1") +
+  lims(x = c(0,1), y = c(0,1))
+
+recovery_weighted_weight2M_plot <- recovery_df %>% 
+  ggplot(aes(weight2M_est, weight2M_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated mean of weight 2", y = "True mean of weight 2", title = "Parameter Recovery For Different Levels of weight 2") +
+  lims(x = c(0,1), y = c(0,1))
+
+recovery_weighted_weight2SD_plot <- recovery_df %>% 
+  ggplot(aes(weight2SD_est, weight2SD_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated SD of weight 2", y = "True SD of weight 2", title = "Parameter Recovery For Different Levels of SD weight 2") +
+  lims(x = c(0,1), y = c(0,1))
+
+ggsave("figures/recovery/weighted/recovery_weighted_biasM_plot.png", recovery_weighted_biasM_plot)
+ggsave("figures/recovery/weighted/recovery_weighted_biasSD_plot.png", recovery_weighted_biasSD_plot)
+ggsave("figures/recovery/weighted/recovery_weighted_weight1M_plot.png", recovery_weighted_weight1M_plot)
+ggsave("figures/recovery/weighted/recovery_weighted_weight1SD_plot.png", recovery_weighted_weight1SD_plot)
+ggsave("figures/recovery/weighted/recovery_weighted_weight2M_plot.png", recovery_weighted_weight2M_plot)
+ggsave("figures/recovery/weighted/recovery_weighted_weight2SD_plot.png", recovery_weighted_weight2SD_plot)
 ```
 
 # Parameter Estimation
