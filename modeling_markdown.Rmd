@@ -589,10 +589,10 @@ ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", p
 loo_model1 <- samples1$loo(save_psis=TRUE, cores=4)
 loo_model2 <- samples2$loo(save_psis=TRUE, cores=4)
 
-png(file="figures/simple_psis.png", width=600, height=350)
+png(file="figures/model_comparison/simple_psis.png", width=600, height=350)
 plot(loo_model1)
 dev.off()
-png(file="figures/weighted_psis.png", width=600, height=350)
+png(file="figures/model_comparison/weighted_psis.png", width=600, height=350)
 plot(loo_model2)
 dev.off()
 
@@ -620,7 +620,7 @@ p1 <- ggplot(elpd, aes(x = n, y = diff_elpd)) +
 pacman::p_load(patchwork)
 p1
 
-ggsave("figures/elpd_diff.png", p1)
+ggsave("figures/model_comparison/elpd_diff.png", p1)
 ```
 
 
