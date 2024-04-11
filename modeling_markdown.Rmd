@@ -719,7 +719,7 @@ write_csv(simple_sample_summary_short, "output/estimation/simple_bayesian_model_
 samples2$summary()
 weighted_sample_summary <- samples2$summary()
 weighted_sample_summary_short <- samples2$summary() %>% 
-  filter(variable %in% c("lp__", "biasM", "biasSD", "weight1M", "weight1SD", "weight2M", "weight1SD"))
+  filter(variable %in% c("lp__", "biasM", "biasSD", "weight1M", "weight1SD", "weight2M", "weight2SD"))
 write_csv(weighted_sample_summary, "output/estimation/weighted_bayesian_model_full.csv")
 write_csv(weighted_sample_summary_short, "output/estimation/weighted_bayesian_model_short.csv")
 ```
@@ -766,7 +766,6 @@ draws_df <- as_draws_df(samples2$draws())
 prior_post_plot_biasM <- ggplot(draws_df) +
   geom_density(aes(biasM), fill = "blue", alpha = 0.3) +
   geom_density(aes(biasM_prior), fill = "red", alpha = 0.3) +
-  geom_vline(xintercept = biasM_val) +
   xlab("BiasM (Log Space)") +
   ylab("Estimate Densities") +
   theme_classic() +
@@ -775,7 +774,6 @@ prior_post_plot_biasM <- ggplot(draws_df) +
 prior_post_plot_biasSD <- ggplot(draws_df) +
   geom_density(aes(biasSD), fill = "blue", alpha = 0.3) +
   geom_density(aes(biasSD_prior), fill = "red", alpha = 0.3) +
-  geom_vline(xintercept = biasSD_val) +
   xlab("BiasSD (Log Space)") +
   ylab("Estimate Densities") +
   theme_classic() +
@@ -784,8 +782,7 @@ prior_post_plot_biasSD <- ggplot(draws_df) +
 prior_post_plot_weight1M <- ggplot(draws_df) +
   geom_density(aes(weight1M), fill = "blue", alpha = 0.3) +
   geom_density(aes(weight1M_prior), fill = "red", alpha = 0.3) +
-  geom_vline(xintercept = weight1M_val) +
-  xlab("Weight1M (Log Space)") +
+  xlab("Weight1M") +
   ylab("Estimate Densities") +
   theme_classic() +
   labs(title = "Prior and Posterior Distrbution for group mean of weight 1", subtitle = "Black line indicates true value")
@@ -793,8 +790,7 @@ prior_post_plot_weight1M <- ggplot(draws_df) +
 prior_post_plot_weight1SD <- ggplot(draws_df) +
   geom_density(aes(weight1SD), fill = "blue", alpha = 0.3) +
   geom_density(aes(weight1SD_prior), fill = "red", alpha = 0.3) +
-  geom_vline(xintercept = weight1SD_val) +
-  xlab("Weight1SD (Log Space)") +
+  xlab("Weight1SD") +
   ylab("Estimate Densities") +
   theme_classic() +
   labs(title = "Prior and Posterior Distrbution for group SD of weight 1", subtitle = "Black line indicates true value")
@@ -802,8 +798,7 @@ prior_post_plot_weight1SD <- ggplot(draws_df) +
 prior_post_plot_weight2M <- ggplot(draws_df) +
   geom_density(aes(weight2M), fill = "blue", alpha = 0.3) +
   geom_density(aes(weight2M_prior), fill = "red", alpha = 0.3) +
-  geom_vline(xintercept = weight2M_val) +
-  xlab("Weight2M (Log Space)") +
+  xlab("Weight2M") +
   ylab("Estimate Densities") +
   theme_classic() +
   labs(title = "Prior and Posterior Distrbution for group mean of weight 2", subtitle = "Black line indicates true value")
@@ -811,8 +806,7 @@ prior_post_plot_weight2M <- ggplot(draws_df) +
 prior_post_plot_weight2SD <- ggplot(draws_df) +
   geom_density(aes(weight2SD), fill = "blue", alpha = 0.3) +
   geom_density(aes(weight2SD_prior), fill = "red", alpha = 0.3) +
-  geom_vline(xintercept = weight2SD_val) +
-  xlab("Weight2SD (Log Space)") +
+  xlab("Weight2SD") +
   ylab("Estimate Densities") +
   theme_classic() +
   labs(title = "Prior and Posterior Distrbution for group SD of weight 2", subtitle = "Black line indicates true value")
@@ -852,10 +846,10 @@ ggsave(filename = "figures/estimation/weighted/prior_post_plot_weight2SD.png", p
 
 ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_biasm)
 ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_biassd)
-ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight1m)
-ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight1sd)
-ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasM.png", plot = caterpiller_weighted_weight2m)
-ggsave(filename = "figures/estimation/weighted/caterpillar_simple_biasSD.png", plot = caterpiller_weighted_weight2sd)
+ggsave(filename = "figures/estimation/weighted/caterpiller_weighted_weight1m.png", plot = caterpiller_weighted_weight1m)
+ggsave(filename = "figures/estimation/weighted/caterpiller_weighted_weight1sd.png", plot = caterpiller_weighted_weight1sd)
+ggsave(filename = "figures/estimation/weighted/caterpiller_weighted_weight2m.png", plot = caterpiller_weighted_weight2m)
+ggsave(filename = "figures/estimation/weighted/caterpiller_weighted_weight2sd.png", plot = caterpiller_weighted_weight2sd)
 ```
 
 ```{r}
@@ -881,6 +875,8 @@ elpd <- tibble(
   diff_elpd = 
   loo_model1$pointwise[, "elpd_loo"] - 
   loo_model2$pointwise[, "elpd_loo"])
+
+sum(elpd$diff_elpd)
 
 p1 <- ggplot(elpd, aes(x = n, y = diff_elpd)) +
   geom_point(alpha = .1) +
