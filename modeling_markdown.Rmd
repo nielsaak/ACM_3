@@ -161,7 +161,7 @@ ggsave(filename = "figures/recovery/simple/caterpillar_simple_biasSD.png", plot 
 recovery_df <- NULL
 
 for (biasM_val in c(-2,-1,-0.5,-0.2,0,0.2,0.5,1,2)) { # Looping through rate levels
-  for (biasSD_val in c(0.5)) {
+  for (biasSD_val in c(0.2,0.4,0.6,0.8,1,1.5,2)) {
   
     # Looping through all the agents to generate the data.
     d <- NULL
@@ -248,7 +248,7 @@ for (biasM_val in c(-2,-1,-0.5,-0.2,0,0.2,0.5,1,2)) { # Looping through rate lev
 
 write_csv(recovery_df, "output/recovery/recoverydf_simple.csv")
 
-recovery_simple_plot <- recovery_df %>% 
+recovery_simple_plot_mean <- recovery_df %>% 
   ggplot(aes(biasM_est, biasM_true)) +
   geom_point(alpha = 0.3) +
   geom_smooth() +
@@ -257,7 +257,17 @@ recovery_simple_plot <- recovery_df %>%
   labs(x = "Estimated mean of Bias", y = "True mean of Bias", title = "Parameter Recovery For Different Levels of bias") +
   lims(x = c(-2.5,2.5), y = c(-2.5,2.5))
 
-ggsave("figures/recovery/simple/recovery_plot.png", recovery_simple_plot)
+recovery_simple_plot_sd <- recovery_df %>% 
+  ggplot(aes(biasSD_est, biasSD_true)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() +
+  geom_abline(intercept = 0,slope=1)+
+  theme_bw() +
+  labs(x = "Estimated SD of Bias", y = "True SD of Bias", title = "Parameter Recovery For Different Levels of bias") +
+  lims(x = c(-2.5,2.5), y = c(-2.5,2.5))
+
+ggsave("figures/recovery/simple/recovery_plot_mean.png", recovery_simple_plot_mean)
+ggsave("figures/recovery/simple/recovery_plot_sd.png", recovery_simple_plot_sd)
 ```
 
 
@@ -852,6 +862,8 @@ ggsave(filename = "figures/estimation/weighted/caterpiller_weighted_weight2m.png
 ggsave(filename = "figures/estimation/weighted/caterpiller_weighted_weight2sd.png", plot = caterpiller_weighted_weight2sd)
 ```
 
+# Model Comparison
+
 ```{r}
 loo_model1 <- samples1$loo(save_psis=TRUE, cores=4)
 loo_model2 <- samples2$loo(save_psis=TRUE, cores=4)
@@ -891,5 +903,180 @@ p1
 
 ggsave("figures/model_comparison/elpd_diff.png", p1)
 ```
+
+## ELPD + Cross-Validation
+
+```{r}
+# Compiling model
+simple_multi_compare_model <- cmdstan_model("simple_multi_bayesian_compare.stan", cpp_options = list(stan_threads = TRUE), pedantic = TRUE)
+
+# Compiling model
+weighted_multi_compare_model <- cmdstan_model("weighted_multi_bayesian_compare.stan", cpp_options = list(stan_threads = TRUE), pedantic = TRUE)
+
+```
+
+```{r}
+df_real <- read_csv("data/cogsci_clean.csv")
+
+df_real <- df_real %>% 
+  filter(GroupRating != 0) %>% 
+  filter(ID != 27) %>% # participant with only 1 for second rating
+  # filter((ID == 1) | (ID == 12)) %>% 
+  select(ID,FaceID, FirstRating, GroupRating, SecondRating) %>% 
+  mutate(FirstRating_new = FirstRating/9, 
+         GroupRating_new = GroupRating/9,
+         # Choice = ifelse(SecondRating > 4, 1, 0)
+         Choice = NA
+         )
+
+for (n in seq(nrow(df_real))) {
+  df_real$Choice[n] <- rbinom(1,1, df_real$SecondRating[n]/9)
+}
+# the problem here is that the trial does not correspond to the same FaceID
+
+df_real$fold <- kfold_split_grouped(K = 5, x = df_real$ID)
+
+log_pd_kfold_simple <- matrix(nrow = 2000, ncol = 3010)
+log_pd_kfold_weighted <- matrix(nrow = 2000, ncol = 3010)
+
+for (k in unique(df_real$fold)) {
+  df_test <- df_real %>% 
+    filter(fold == k)
+  
+  df_train <- df_real %>% 
+    filter(fold != k)
+  
+  df_first_rating_train <- df_train %>% 
+    group_by(ID) %>% 
+    mutate(trial = row_number()) %>% select(trial, ID, FirstRating_new) %>%
+    pivot_wider(values_from = FirstRating_new, names_from = ID) %>% 
+    select(-trial)
+  
+  df_group_rating_train <- df_train %>% 
+    group_by(ID) %>% 
+    mutate(trial = row_number()) %>% select(trial, ID, GroupRating_new) %>%
+    pivot_wider(values_from = GroupRating_new, names_from = ID) %>% 
+    select(-trial)
+  
+  df_second_rating_train <- df_train %>% 
+    group_by(ID) %>% 
+    mutate(trial = row_number()) %>% select(trial, ID, Choice) %>%
+    pivot_wider(values_from = Choice, names_from = ID) %>% 
+    select(-trial)
+  
+  df_first_rating_test <- df_test %>% 
+    group_by(ID) %>% 
+    mutate(trial = row_number()) %>% select(trial, ID, FirstRating_new) %>%
+    pivot_wider(values_from = FirstRating_new, names_from = ID) %>% 
+    select(-trial)
+  
+  df_group_rating_test <- df_test %>% 
+    group_by(ID) %>% 
+    mutate(trial = row_number()) %>% select(trial, ID, GroupRating_new) %>%
+    pivot_wider(values_from = GroupRating_new, names_from = ID) %>% 
+    select(-trial)
+  
+  df_second_rating_test <- df_test %>% 
+    group_by(ID) %>% 
+    mutate(trial = row_number()) %>% select(trial, ID, Choice) %>%
+    pivot_wider(values_from = Choice, names_from = ID) %>% 
+    select(-trial)
+  
+  data_simpleBayes <- list(
+    trials = (df_real %>% filter(ID == 1) %>% nrow()),
+    subjects = n_distinct(df_train$ID),
+    first_rating = as.matrix(df_first_rating_train),
+    other_rating = as.matrix(df_group_rating_train),
+    second_rating = as.matrix(df_second_rating_train),
+    subjects_test = n_distinct(df_test$ID),
+    first_rating_test = as.matrix(df_first_rating_test),
+    other_rating_test = as.matrix(df_group_rating_test),
+    second_rating_test = as.matrix(df_second_rating_test)
+    )
+  
+  samples1 <- simple_multi_compare_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =1,
+   parallel_chains = 1,
+   threads_per_chain = 4,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+   )
+
+  samples2 <- weighted_multi_compare_model$sample(
+   data = data_simpleBayes,
+   seed = 123,
+   chains =1,
+   parallel_chains = 1,
+   threads_per_chain = 4,
+   iter_warmup = 2000,
+   iter_sampling = 2000,
+   refresh = 500,
+   max_treedepth = 20,
+   adapt_delta = 0.99,
+   )
+  
+  log_pd_kfold_simple[, df_real$fold == k] <- samples1$draws("log_lik_test", format = "matrix")
+  log_pd_kfold_weighted[, df_real$fold == k] <- samples2$draws("log_lik_test", format = "matrix")
+  
+}
+```
+
+
+```{r}
+elpd_kfold_simple <- elpd(log_pd_kfold_simple)
+elpd_kfold_weighted <- elpd(log_pd_kfold_weighted)
+
+loo_compare(elpd_kfold_simple, elpd_kfold_weighted)
+```
+```{r}
+elpd <- tibble(
+  n = seq(3010),
+  diff_elpd = 
+  elpd_kfold_simple$pointwise[, "elpd"] - 
+  elpd_kfold_weighted$pointwise[, "elpd"],
+  FaceID=as.character(df_real$FaceID),
+  FirstRating=as.character(df_real$FirstRating),
+  GroupRating=as.character(df_real$GroupRating),
+  fold=as.character(df_real$fold),
+  diff=as.character(abs(df_real$FirstRating-df_real$GroupRating)))
+
+p1 <- ggplot(elpd, aes(x = n, y = diff_elpd, colour = GroupRating)) +
+  geom_point(alpha = .9) +
+  #xlim(.5,1.01) +
+  #ylim(-1.5,1.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  theme_bw() +
+  lims(y = c(-1,1))
+
+p2 <- ggplot(elpd, aes(x = n, y = diff_elpd, colour = diff)) +
+  geom_point(alpha = .9) +
+  #xlim(.5,1.01) +
+  #ylim(-1.5,1.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  theme_bw() +
+  lims(y = c(-1,1))
+
+
+pacman::p_load(patchwork)
+p1
+p2
+
+ggsave("figures/model_comparison/elpd_diff_group.png", p1, width = 10, height = 10)
+ggsave("figures/model_comparison/elpd_diff_diff.png", p2, width = 10, height = 10)
+```
+
+
+
+
+
+
+
+
+
 
 
